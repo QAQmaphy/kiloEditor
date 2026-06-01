@@ -4,33 +4,43 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <termios.h>
+#include <string.h>
 #include <unistd.h>
+#include <sys/ioctl.h>
 // struct termios 、 tcgetattr() 、 tcsetattr() 、 ECHO 和 TCSAFLUSH 均源自
 // <termios.h> 。
 
-/*** define ***/
+/*** define **ellisonleao/gruvbox.nvim*/
 
 #define CTRL_KEY(k) ((k) & 0x1f)
 /*** data  ***/
 // 这是用户终端的原始属性，若没有，该程序可能会导致用户的终端属性被修改
-struct termios orig_termios;
-
+struct editorConfig{
+    int screenrows;
+    int screencols;
+    struct termios orig_termios;
+};
+struct editorConfig E;
 /*** terminal ***/
 void die(const char *s) {
+    //退出时清屏
+  write(STDOUT_FILENO,"\x1b[2J",4);
+  write(STDOUT_FILENO,"\x1b[H",3);
+
   perror(s);
   exit(1);
 }
 void disableRawMode() {
-  if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios) == -1)
+  if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &E.orig_termios) == -1)
     die("tcsetattr");
 }
 void enableRawMode() {
-  if (tcgetattr(STDIN_FILENO, &orig_termios) == -1)
+  if (tcgetattr(STDIN_FILENO, &E.orig_termios) == -1)
     die("tcgetattr");
   // atexit来自stdlib，用来注册函数，这样就是在程序退出的时候调用
   atexit(disableRawMode);
 
-  struct termios raw = orig_termios;
+  struct termios raw = E.orig_termios;
 
   // c_lflag对应的是本地标志, 可以理解成杂项标志 raw.c_lflag &= ~(ECHO);
   // ICANON用于关闭规范模式，可以逐字节读取
@@ -61,9 +71,84 @@ char editorReadKey() {
   }
   return c;
 }
+//获取光标位置
+int getCursorPosition(int *rows,int *cols){
+    char buf[32];
+    unsigned int i = 0;
+    if(write(STDOUT_FILENO ,"\x1b[6n",4)!=4)return -1;
+
+    while(i < sizeof(buf) -1 )
+    {
+        if(read(STDIN_FILENO,&buf[i],1) != 1)break;
+        if(buf[i] == 'R')break;
+        i++;
+    }
+    buf[i] = '\0';
+
+    if(buf[0] != '\x1b' || buf[1]!= '[')
+        return -1;
+    if(sscanf(&buf[2],getWindowSize"%d;%d",rows,cols)!=2)
+        return -1;
+    return 0;
+}
+int getWindowSize(int *rows, int *cols)
+{
+    struct winsize ws;
+    //调用ioctl并传入tiocgwinsz，并存到ws中
+    if(ioctl(STDOUT_FILENO,TIOCGWINSZ,&ws) == -1 || ws.ws_col == 0)
+    {
+        //用获取光标位置的方式来获取到我们需要的行列数
+        if(write(STDOUT_FILENO,"\x1b[999C\x1b[999B",12)!= 12)return -1;
+        return getCursorPosition(rows,cols);
+    }else{
+        *cols = ws.ws_col;
+        *rows = ws.ws_row;
+        return 0;
+    }
+}
+/*** append buffer ***/
+
+//支持追加的字符串
+struct abuf{
+    char *b;
+    int len;
+};
+#define ABUF_INIT {NULL,0}
+
+void abAppend(struct abuf *ab, const char *s,int len)
+{
+    char *new = realloc(ab->b,ab->len +len);
+    if(new ==NULL)
+        return;
+
+    memcpy(&new[ab->len],s,len);
+    ab->b = new;
+    ab->len += len;
+}
+void abfree(struct abuf *ab)
+{
+    free(ab->b);
+}
 /*** output ***/
 
-void editorRefreshScreen() { write(STDOUT_FILENO, "\x1b[2J", 4); }
+//绘制波浪线
+void editorDrawRows(){
+    int y ;
+    for(y = 0;y<E.screenrows;y++)
+    {
+        wirte(STDOUT_FILENO,"~",1);
+        if(y < E.screenrows - 1)
+        write(STDOUT_FILENO,"\r\n",2);
+    }
+}
+void editorRefreshScreen() {
+    write(STDOUT_FILENO, "\x1b[2J", 4);
+    write(STDOUT_FILENO, "\x1b[H",3);
+
+    editorDrawRows();
+    write(STDOUT_FILENO,"\x1b[H",3);
+}
+
 /*** input ***/
 
 void editorProcessKeypress() {
@@ -71,17 +156,28 @@ void editorProcessKeypress() {
 
   switch (c) {
   case CTRL_KEY('q'):
+    write(STDOUT_FILENO,"\x1b[2J",4);
+
+    write(STDOUT_FILENO,"\x1b[H",3);
+
+
     exit(0);
     break;
   }
 }
 /*** init ***/
+int initEditor(){
+    if(getWindowSize(&E.screenrows,&E.screencols) ==-1)
+        die("getWindowSize");
+}
 int main() {
   enableRawMode();
-
+  initEditor();
   while (1) {
+    editorRefreshScreen();
     editorProcessKeypress();
   }
 
   return 0;
 }
+
