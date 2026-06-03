@@ -13,6 +13,7 @@
 /*** define **ellisonleao/gruvbox.nvim*/
 
 #define CTRL_KEY(k) ((k) & 0x1f)
+#define KILO_VERSION "0.0.1"
 /*** data  ***/
 // 这是用户终端的原始属性，若没有，该程序可能会导致用户的终端属性被修改
 struct editorConfig{
@@ -24,8 +25,8 @@ struct editorConfig E;
 /*** terminal ***/
 void die(const char *s) {
     //退出时清屏
-  write(STDOUT_FILENO,"\x1b[2J",4);
-  write(STDOUT_FILENO,"\x1b[H",3);
+  write(STDOUT_FILENO,"\x1b[2J",4); // 清屏
+  write(STDOUT_FILENO,"\x1b[H",3);  // 移动光标到左上角
 
   perror(s);
   exit(1);
@@ -75,7 +76,7 @@ char editorReadKey() {
 int getCursorPosition(int *rows,int *cols){
     char buf[32];
     unsigned int i = 0;
-    if(write(STDOUT_FILENO ,"\x1b[6n",4)!=4)return -1;
+    if(write(STDOUT_FILENO ,"\x1b[6n",4)!=4)return -1; // 查询光标位置(DSR)，终端回复"\x1b[行;列R"
 
     while(i < sizeof(buf) -1 )
     {
@@ -87,7 +88,7 @@ int getCursorPosition(int *rows,int *cols){
 
     if(buf[0] != '\x1b' || buf[1]!= '[')
         return -1;
-    if(sscanf(&buf[2],getWindowSize"%d;%d",rows,cols)!=2)
+    if(sscanf(&buf[2],"%d;%d",rows,cols)!=2)
         return -1;
     return 0;
 }
@@ -98,7 +99,7 @@ int getWindowSize(int *rows, int *cols)
     if(ioctl(STDOUT_FILENO,TIOCGWINSZ,&ws) == -1 || ws.ws_col == 0)
     {
         //用获取光标位置的方式来获取到我们需要的行列数
-        if(write(STDOUT_FILENO,"\x1b[999C\x1b[999B",12)!= 12)return -1;
+        if(write(STDOUT_FILENO,"\x1b[999C\x1b[999B",12)!= 12)return -1; // 光标移到右下角(CUF/CUD)，再用DSR获取行列
         return getCursorPosition(rows,cols);
     }else{
         *cols = ws.ws_col;
@@ -131,26 +132,47 @@ void abfree(struct abuf *ab)
 }
 /*** output ***/
 
-//绘制波浪线
 void editorDrawRows(struct abuf* ab){
     int y ;
     for(y = 0;y<E.screenrows;y++)
     {
-	abAppend(ab,"~",1);
+        //在屏幕的1/3处显示信息
+        if(y == E.screenrows/3) 
+        {
+            char welcome[80];
+            int welcomelen = snprintf(welcome,sizeof(welcome),"Kilo editor -- version %s",KILO_VERSION);
+            //屏幕过窄的截断处理
+            if(welcomelen > E.screencols)welcomelen = E.screencols;
+            //左右居中显示
+            int padding = (E.screencols - welcomelen)/2;
+            if(padding){
+                abAppend(ab,"~",1);
+                padding --;
+            }
+            while(padding--)abAppend(ab," ",1);
+            abAppend(ab,welcome,welcomelen);
+        }else{
+	        abAppend(ab,"~",1);
+        }
+        abAppend(ab,"\x1b[K",3);
+        
         if(y < E.screenrows - 1)
-	{
-	    abAppend(ab,"\r\n",2);
-	}
+	    {
+	        abAppend(ab,"\r\n",2);
+	    }
     }
 }
 void editorRefreshScreen() {
     struct abuf ab = ABUF_INIT;
-    abAppend(&ab, "\x1b[2J",4);
-    abAppend(&ab,"\x1b[H",3);
+
+    abAppend(&ab,"\x1b[?25l",6); // 隐藏光标
+    abAppend(&ab,"\x1b[H",3);     // 光标到左上角
 
     editorDrawRows(&ab);
 
-    abAppend(&ab,"\x1n[H",3);
+    abAppend(&ab,"\x1b[H",3);     // 光标移到左上角（等待输入位置）
+
+    abAppend(&ab,"\x1b[?25h",6);  // 显示光标
 
     write(STDOUT_FILENO,ab.b,ab.len);
     abfree(&ab);
@@ -163,9 +185,9 @@ void editorProcessKeypress() {
 
   switch (c) {
   case CTRL_KEY('q'):
-    write(STDOUT_FILENO,"\x1b[2J",4);
+    write(STDOUT_FILENO,"\x1b[2J",4);  // 清屏
 
-    write(STDOUT_FILENO,"\x1b[H",3);
+    write(STDOUT_FILENO,"\x1b[H",3);   // 光标到左上角
 
 
     exit(0);
